@@ -20,6 +20,13 @@ pub struct TxProof {
     pub merkle_proof: Vec<String>,
 }
 
+pub struct DecredBlock {
+    pub hash: String,
+    pub height: u64,
+    pub txids: Vec<H256>,
+    pub tx_hex: Vec<String>,
+}
+
 pub trait UTXOChainBlock {
     fn from_str(str: &str) -> Result<Self, UtxoClientError>
     where
@@ -79,10 +86,31 @@ impl UTXOChainBlock for zebra_chain::block::Block {
     }
 }
 
+impl UTXOChainBlock for DecredBlock {
+    fn from_str(_str: &str) -> Result<Self, UtxoClientError> {
+        Err(UtxoClientError::Other(
+            "Decred uses RPC only, not local block parsing".into(),
+        ))
+    }
+
+    fn hash(&self) -> String {
+        self.hash.clone()
+    }
+
+    fn transactions(&self) -> Vec<H256> {
+        self.txids.clone()
+    }
+
+    fn tx_data(&self, tx_index: usize) -> Vec<u8> {
+        hex::decode(&self.tx_hex[tx_index]).unwrap()
+    }
+}
+
 pub trait UTXOChain {
     type Block: UTXOChainBlock;
 
     fn is_zcash() -> bool;
+    fn is_decred() -> bool;
 }
 
 pub struct Bitcoin;
@@ -90,6 +118,9 @@ impl UTXOChain for Bitcoin {
     type Block = bitcoin::Block;
 
     fn is_zcash() -> bool {
+        false
+    }
+    fn is_decred() -> bool {
         false
     }
 }
@@ -100,5 +131,20 @@ impl UTXOChain for Zcash {
 
     fn is_zcash() -> bool {
         true
+    }
+    fn is_decred() -> bool {
+        false
+    }
+}
+
+pub struct Decred;
+impl UTXOChain for Decred {
+    type Block = DecredBlock;
+
+    fn is_zcash() -> bool {
+        false
+    }
+    fn is_decred() -> bool { 
+        true 
     }
 }

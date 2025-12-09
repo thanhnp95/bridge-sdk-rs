@@ -16,7 +16,9 @@ use omni_types::{ChainKind, Fee, OmniAddress, TransferId};
 use solana_bridge_client::SolanaBridgeClientBuilder;
 use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::{signature::Keypair, signer::EncodableKey};
-use utxo_bridge_client::{types::Bitcoin, types::Zcash, AuthOptions, UTXOBridgeClient};
+use utxo_bridge_client::{
+    types::Bitcoin, types::Decred, types::Zcash, AuthOptions, UTXOBridgeClient,
+};
 use wormhole_bridge_client::WormholeBridgeClientBuilder;
 
 use crate::{combined_config, CliConfig, Network};
@@ -26,6 +28,7 @@ use crate::{combined_config, CliConfig, Network};
 pub enum UTXOChainArg {
     Btc,
     Zcash,
+    Dcr,
 }
 
 impl From<UTXOChainArg> for ChainKind {
@@ -33,6 +36,7 @@ impl From<UTXOChainArg> for ChainKind {
         match value {
             UTXOChainArg::Btc => ChainKind::Btc,
             UTXOChainArg::Zcash => ChainKind::Zcash,
+            UTXOChainArg::Dcr => ChainKind::Dcr,
         }
     }
 }
@@ -42,6 +46,15 @@ impl From<Network> for utxo_utils::address::Network {
         match value {
             Network::Mainnet => utxo_utils::address::Network::Mainnet,
             Network::Testnet | Network::Devnet => utxo_utils::address::Network::Testnet,
+        }
+    }
+}
+
+impl From<Network> for dcr_utils::address::Network {
+    fn from(value: Network) -> Self {
+        match value {
+            Network::Mainnet => dcr_utils::address::Network::Mainnet,
+            Network::Testnet | Network::Devnet => dcr_utils::address::Network::Testnet,
         }
     }
 }
@@ -513,7 +526,7 @@ pub async fn match_subcommand(cmd: OmniConnectorSubCommand, network: Network) {
                     .await
                     .unwrap();
             }
-            ChainKind::Zcash | ChainKind::Btc => {
+            ChainKind::Zcash | ChainKind::Btc | ChainKind::Dcr => {
                 panic!("DeployToken is not supported for UTXO chains");
             }
         },
@@ -651,7 +664,7 @@ pub async fn match_subcommand(cmd: OmniConnectorSubCommand, network: Network) {
                         .await
                         .unwrap();
                 }
-                ChainKind::Near | ChainKind::Btc | ChainKind::Zcash => {
+                ChainKind::Near | ChainKind::Btc | ChainKind::Zcash | ChainKind::Dcr => {
                     panic!("Unsupported chain for NearFinTransfer: {chain:?}");
                 }
             }
@@ -1031,6 +1044,16 @@ fn omni_connector(network: Network, cli_config: CliConfig) -> OmniConnector {
                     .map(|account| account.parse().unwrap()),
             },
         ),
+        (
+            ChainKind::Dcr,
+            UTXOChainAccounts {
+                utxo_chain_connector: combined_config
+                    .dcr_connector
+                    .map(|account| account.parse().unwrap()),
+                utxo_chain_token: combined_config.dcr.map(|account| account.parse().unwrap()),
+                satoshi_relayer: None,
+            },
+        ),
     ]);
 
     let near_bridge_client = NearBridgeClientBuilder::default()
@@ -1140,11 +1163,23 @@ fn omni_connector(network: Network, cli_config: CliConfig) -> OmniConnector {
         AuthOptions::None
     };
 
+    let dcr_client_auth = if let Some(api_key) = combined_config.dcr_api_key {
+        AuthOptions::XApiKey(api_key)
+    } else if let Some(basic_auth) = combined_config.dcr_basic_auth {
+        let (user, password) = basic_auth.split_once(':').unwrap();
+        AuthOptions::BasicAuth(user.to_string(), password.to_string())
+    } else {
+        AuthOptions::None
+    };
+
     let btc_bridge_client =
         UTXOBridgeClient::<Bitcoin>::new(combined_config.btc_endpoint.unwrap(), btc_client_auth);
 
     let zcash_bridge_client =
         UTXOBridgeClient::<Zcash>::new(combined_config.zcash_endpoint.unwrap(), zcash_client_auth);
+
+    let dcr_bridge_client =
+        UTXOBridgeClient::<Decred>::new(combined_config.dcr_endpoint.unwrap(), dcr_client_auth);
 
     let eth_light_client = LightClientBuilder::default()
         .endpoint(combined_config.near_rpc.clone())
@@ -1179,6 +1214,17 @@ fn omni_connector(network: Network, cli_config: CliConfig) -> OmniConnector {
         .build()
         .unwrap();
 
+    let dcr_light_client = LightClientBuilder::default()
+        .endpoint(combined_config.near_rpc.clone())
+        .chain(Some(ChainKind::Dcr))
+        .light_client_id(
+            combined_config
+                .dcr_light_client_id
+                .map(|light_client| light_client.parse().unwrap()),
+        )
+        .build()
+        .unwrap();
+
     OmniConnectorBuilder::default()
         .network(Some(network.into()))
         .near_bridge_client(Some(near_bridge_client))
@@ -1193,6 +1239,7 @@ fn omni_connector(network: Network, cli_config: CliConfig) -> OmniConnector {
         .eth_light_client(Some(eth_light_client))
         .btc_light_client(Some(btc_light_client))
         .zcash_light_client(Some(zcash_light_client))
+        .dcr_light_client(Some(dcr_light_client))
         .build()
         .unwrap()
 }

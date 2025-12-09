@@ -4,6 +4,7 @@ pub const NEAR_TOKEN_LOCKER_ID_MAINNET: &str = "omni.bridge.near";
 pub const ETH_LIGHT_CLIENT_ID_MAINNET: &str = "client-eth2.bridge.near";
 pub const BTC_LIGHT_CLIENT_ID_MAINNET: &str = "btc-client.bridge.near";
 pub const ZCASH_LIGHT_CLIENT_ID_MAINNET: &str = "zcash-client.bridge.near";
+pub const DCR_LIGHT_CLIENT_ID_MAINNET: &str = "<dcr-light-client.near>";
 
 pub const ETH_RPC_MAINNET: &str = "https://eth.llamarpc.com";
 pub const ETH_CHAIN_ID_MAINNET: u64 = 1;
@@ -46,12 +47,17 @@ pub const ZCASH_ENDPOINT_MAINNET: &str = "https://zcash-mainnet.gateway.tatum.io
 pub const ZCASH_CONNECTOR_MAINNET: &str = "zcash-connector.bridge.near";
 pub const ZCASH_MAINNET: &str = "nzec.bridge.near";
 
+pub const DCR_ENDPOINT_MAINNET: &str = "<mainnet-rpc>";
+pub const DCR_CONNECTOR_MAINNET: &str = "<dcr-connector.near>";
+pub const DCR_MAINNET: &str = "<ndcr.near>";
+
 /// Testnet
 pub const NEAR_RPC_TESTNET: &str = "https://archival-rpc.testnet.fastnear.com/";
 pub const NEAR_TOKEN_LOCKER_ID_TESTNET: &str = "omni.n-bridge.testnet";
 pub const ETH_LIGHT_CLIENT_ID_TESTNET: &str = "client-eth2.sepolia.testnet";
 pub const BTC_LIGHT_CLIENT_ID_TESTNET: &str = "btc-client-v4.testnet";
 pub const ZCASH_LIGHT_CLIENT_ID_TESTNET: &str = "zcash-client.n-bridge.testnet";
+pub const DCR_LIGHT_CLIENT_ID_TESTNET: &str = "<dcr-light-client.testnet.near>";
 
 pub const ETH_RPC_TESTNET: &str = "https://ethereum-sepolia-rpc.publicnode.com";
 pub const ETH_CHAIN_ID_TESTNET: u64 = 11_155_111;
@@ -90,6 +96,10 @@ pub const BTC_CONNECTOR_TESTNET: &str = "btc-connector.n-bridge.testnet";
 pub const BTC_TESTNET: &str = "nbtc.n-bridge.testnet";
 pub const SATOSHI_RELAYER_TESTNET: &str = "cosmosfirst.testnet";
 
+pub const DCR_ENDPOINT_TESTNET: &str = "<testnet-rpc>";
+pub const DCR_CONNECTOR_TESTNET: &str = "<dcr-connector.testnet.near>";
+pub const DCR_TESTNET: &str = "<ndcr.testnet.near>";
+
 pub const ZCASH_ENDPOINT_TESTNET: &str = "https://zcash-testnet.gateway.tatum.io/";
 pub const ZCASH_CONNECTOR_TESTNET: &str = "zcash_connector.n-bridge.testnet";
 pub const ZCASH_TESTNET: &str = "nzcash.n-bridge.testnet";
@@ -100,6 +110,7 @@ pub const NEAR_TOKEN_LOCKER_ID_DEVNET: &str = "omni-locker.testnet";
 pub const ETH_LIGHT_CLIENT_ID_DEVNET: &str = "client-eth2.sepolia.testnet";
 pub const BTC_LIGHT_CLIENT_ID_DEVNET: &str = "btc-client-v4.testnet";
 pub const ZCASH_LIGHT_CLIENT_ID_DEVNET: &str = "zcash-client.n-bridge.testnet";
+pub const DCR_LIGHT_CLIENT_ID_DEVNET: &str = "<dcr-light-client.devnet.near>";
 
 pub const ETH_RPC_DEVNET: &str = "https://ethereum-sepolia-rpc.publicnode.com";
 pub const ETH_CHAIN_ID_DEVNET: u64 = 11_155_111;
@@ -141,3 +152,7 @@ pub const SATOSHI_RELAYER_DEVNET: &str = "cosmosfirst.testnet";
 pub const ZCASH_ENDPOINT_DEVNET: &str = "https://zcash-testnet.gateway.tatum.io/";
 pub const ZCASH_CONNECTOR_DEVNET: &str = "zcash_connector.n-bridge.testnet";
 pub const ZCASH_DEVNET: &str = "nzcash.n-bridge.testnet";
+
+pub const DCR_ENDPOINT_DEVNET: &str = "<devnet-rpc>";
+pub const DCR_CONNECTOR_DEVNET: &str = "<dcr-connector.devnet.near>";
+pub const DCR_DEVNET: &str = "<ndcr.devnet.near>";

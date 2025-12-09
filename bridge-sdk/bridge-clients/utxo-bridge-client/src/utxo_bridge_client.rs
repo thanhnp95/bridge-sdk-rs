@@ -1,4 +1,5 @@
 use bitcoin::BlockHash;
+use bitcoin::hashes::Hash;
 use bitcoincore_rpc::json::EstimateSmartFeeResult;
 use bitcoincore_rpc::{bitcoin, jsonrpc::base64};
 use reqwest::{
@@ -10,9 +11,11 @@ use std::{marker::PhantomData, str::FromStr};
 
 use crate::error::UtxoClientError;
 use crate::types::{TxProof, UTXOChain, UTXOChainBlock};
+use crate::decred_rpc::DecredRpc;
 
 pub mod error;
 pub mod types;
+pub mod decred_rpc;
 
 pub enum AuthOptions {
     None,
@@ -31,6 +34,10 @@ struct JsonRpcResponse<T> {
 pub struct UTXOBridgeClient<T: UTXOChain> {
     endpoint_url: String,
     http_client: Client,
+
+    /// Optional: Decred RPC (only created if chain is Decred)
+    dcr_rpc: Option<DecredRpc>,
+
     _phantom: PhantomData<T>,
 }
 
@@ -50,12 +57,26 @@ impl<T: UTXOChain> UTXOBridgeClient<T> {
             }
         }
 
-        UTXOBridgeClient::<T> {
+        let http_client = ClientBuilder::new()
+            .default_headers(headers)
+            .build()
+            .unwrap();
+
+        // If Decred → initialize DecredRpc
+        let dcr_rpc = if T::is_decred() {
+            Some(DecredRpc::new(
+                rpc_endpoint.clone(),
+                "rpcuser".into(),
+                "rpcpass".into(),
+            ))
+        } else {
+            None
+        };
+
+        Self {
             endpoint_url: rpc_endpoint,
-            http_client: ClientBuilder::new()
-                .default_headers(headers)
-                .build()
-                .unwrap(),
+            http_client,
+            dcr_rpc,
             _phantom: PhantomData,
         }
     }
@@ -64,6 +85,9 @@ impl<T: UTXOChain> UTXOBridgeClient<T> {
         &self,
         tx_hash: &str,
     ) -> Result<BlockHash, UtxoClientError> {
+        if T::is_decred() {
+            return Ok(BlockHash::from_byte_array([0u8; 32]));
+        }
         let args = if T::is_zcash() {
             json!([tx_hash, 1])
         } else {
@@ -121,6 +145,13 @@ impl<T: UTXOChain> UTXOBridgeClient<T> {
         &self,
         block_hash: &str,
     ) -> Result<u64, UtxoClientError> {
+
+        if T::is_decred() {
+            let dcr = self.dcr_rpc.as_ref().unwrap();
+            let block = dcr.get_block(block_hash).await?;
+            return Ok(block.height);
+        }
+
         let response_text = self
             .http_client
             .post(&self.endpoint_url)
@@ -161,6 +192,10 @@ impl<T: UTXOChain> UTXOBridgeClient<T> {
     }
 
     pub async fn extract_btc_proof(&self, tx_hash: &str) -> Result<TxProof, UtxoClientError> {
+        if T::is_decred() {
+            return self.extract_dcr_proof(tx_hash).await;
+        }
+
         let block_hash = self.get_block_hash_by_tx_hash(tx_hash).await?;
         let block_height = self
             .get_block_height_by_block_hash(&block_hash.to_string())
@@ -225,8 +260,47 @@ impl<T: UTXOChain> UTXOBridgeClient<T> {
         })
     }
 
+    // ============================================================
+    // 4. DECRED PROOF
+    // ============================================================
+    pub async fn extract_dcr_proof(&self, tx_hash: &str) -> Result<TxProof, UtxoClientError> {
+        let dcr = self.dcr_rpc.as_ref().unwrap();
+
+        // Fetch tx info to get block hash
+        let tx = dcr.get_raw_tx(tx_hash).await?;
+        let block_hash = tx.block_hash.ok_or_else(|| UtxoClientError::Other("No blockhash".into()))?;
+
+        // Fetch block
+        let block = dcr.get_block(&block_hash).await?;
+
+        // Tx index
+        let tx_index = block
+            .txids
+            .iter()
+            .position(|h| h.to_string() == tx_hash)
+            .ok_or(UtxoClientError::Other("DCR tx not in block".into()))?;
+
+        // Merkle proof
+        let proof = dcr.get_merkle_proof(tx_hash, &block_hash).await?;
+        let tx_bytes = hex::decode(&block.tx_hex[tx_index])
+        .map_err(|e| UtxoClientError::Other(format!("Invalid DCR tx hex: {e}")))?;
+
+        Ok(TxProof {
+            block_height: block.height,
+            tx_bytes,
+            tx_block_blockhash: block_hash,
+            tx_index: tx_index as u64,
+            merkle_proof: proof.hashes,
+        })
+    }
+
     pub async fn get_fee_rate(&self) -> Result<u64, UtxoClientError> {
         if T::is_zcash() {
+            return Ok(1000);
+        }
+
+        if T::is_decred() {
+            // simple default fee rate for DCR
             return Ok(1000);
         }
 
@@ -273,6 +347,10 @@ impl<T: UTXOChain> UTXOBridgeClient<T> {
     }
 
     pub async fn send_tx(&self, tx_bytes: &[u8]) -> Result<String, UtxoClientError> {
+        if T::is_decred() {
+            let dcr = self.dcr_rpc.as_ref().unwrap();
+            return dcr.send_dcr_transaction(tx_bytes).await;
+        } 
         let hex_str = hex::encode(tx_bytes);
         let response_text = self
             .http_client

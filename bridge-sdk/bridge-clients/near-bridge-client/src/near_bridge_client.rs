@@ -16,6 +16,8 @@ use serde_json::json;
 
 pub mod btc;
 
+pub mod dcr;
+
 const STORAGE_DEPOSIT_GAS: u64 = 10_000_000_000_000;
 
 const LOG_METADATA_GAS: u64 = 300_000_000_000_000;

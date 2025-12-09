@@ -1,0 +1,14 @@
+[package]
+name = "dcr-utils"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+omni-types.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_with.workspace = true
+# REQUIRED dependencies cho DcrAddress
+bs58 = "0.5"
+sha2 = "0.10"
+hex = "0.4"

@@ -24,6 +24,8 @@ struct CliConfig {
     btc_light_client_id: Option<String>,
     #[arg(long)]
     zcash_light_client_id: Option<String>,
+    #[arg(long)]
+    dcr_light_client_id: Option<String>,
 
     #[arg(long)]
     eth_rpc: Option<String>,
@@ -108,6 +110,17 @@ struct CliConfig {
     zcash: Option<String>,
 
     #[arg(long)]
+    dcr_endpoint: Option<String>,
+    #[arg(long)]
+    dcr_api_key: Option<String>,
+    #[arg(long)]
+    dcr_basic_auth: Option<String>,
+    #[arg(long)]
+    dcr_connector: Option<String>,
+    #[arg(long)]
+    dcr: Option<String>,
+
+    #[arg(long)]
     config: Option<String>,
 }
 
@@ -121,6 +134,7 @@ impl CliConfig {
             eth_light_client_id: self.eth_light_client_id.or(other.eth_light_client_id),
             btc_light_client_id: self.btc_light_client_id.or(other.btc_light_client_id),
             zcash_light_client_id: self.zcash_light_client_id.or(other.zcash_light_client_id),
+            dcr_light_client_id: self.dcr_light_client_id.or(other.dcr_light_client_id),
 
             eth_rpc: self.eth_rpc.or(other.eth_rpc),
             eth_chain_id: self.eth_chain_id.or(other.eth_chain_id),
@@ -181,6 +195,12 @@ impl CliConfig {
             zcash_connector: self.zcash_connector.or(other.zcash_connector),
             zcash: self.zcash.or(other.zcash),
 
+            dcr_endpoint: self.dcr_endpoint.or(other.dcr_endpoint),
+            dcr_api_key: self.dcr_api_key.or(other.dcr_api_key),
+            dcr_basic_auth: self.dcr_basic_auth.or(other.dcr_basic_auth),
+            dcr_connector: self.dcr_connector.or(other.dcr_connector),
+            dcr: self.dcr.or(other.dcr),
+
             config: self.config.or(other.config),
         }
     }
@@ -195,6 +215,7 @@ fn env_config() -> CliConfig {
         eth_light_client_id: env::var("ETH_LIGHT_CLIENT_ID").ok(),
         btc_light_client_id: env::var("BTC_LIGHT_CLIENT_ID").ok(),
         zcash_light_client_id: env::var("ZCASH_LIGHT_CLIENT_ID").ok(),
+        dcr_light_client_id: env::var("DCR_LIGHT_CLIENT_ID").ok(),
 
         eth_rpc: env::var("ETH_RPC").ok(),
         eth_chain_id: env::var("ETH_CHAIN_ID")
@@ -255,6 +276,12 @@ fn env_config() -> CliConfig {
         zcash_connector: env::var("ZCASH_CONNECTOR").ok(),
         zcash: env::var("ZCASH").ok(),
 
+        dcr_endpoint: env::var("DCR_ENDPOINT").ok(),
+        dcr_api_key: env::var("DCR_API_KEY").ok(),
+        dcr_basic_auth: env::var("DCR_BASIC_AUTH").ok(),
+        dcr_connector: env::var("DCR_CONNECTOR").ok(),
+        dcr: env::var("DCR").ok(),
+
         config: None,
     }
 }
@@ -270,6 +297,7 @@ fn default_config(network: Network) -> CliConfig {
             eth_light_client_id: Some(defaults::ETH_LIGHT_CLIENT_ID_MAINNET.to_owned()),
             btc_light_client_id: Some(defaults::BTC_LIGHT_CLIENT_ID_MAINNET.to_owned()),
             zcash_light_client_id: Some(defaults::ZCASH_LIGHT_CLIENT_ID_MAINNET.to_owned()),
+            dcr_light_client_id: Some(defaults::DCR_LIGHT_CLIENT_ID_MAINNET.to_owned()),
 
             eth_rpc: Some(defaults::ETH_RPC_MAINNET.to_owned()),
             eth_chain_id: Some(defaults::ETH_CHAIN_ID_MAINNET),
@@ -327,6 +355,12 @@ fn default_config(network: Network) -> CliConfig {
             zcash_connector: Some(defaults::ZCASH_CONNECTOR_MAINNET.to_owned()),
             zcash: Some(defaults::ZCASH_MAINNET.to_owned()),
 
+            dcr_endpoint: Some(defaults::DCR_ENDPOINT_MAINNET.to_owned()),
+            dcr_api_key: None,
+            dcr_basic_auth: None,
+            dcr_connector: Some(defaults::DCR_CONNECTOR_MAINNET.to_owned()),
+            dcr: Some(defaults::DCR_MAINNET.to_owned()),
+
             config: None,
         },
         Network::Testnet => CliConfig {
@@ -337,6 +371,7 @@ fn default_config(network: Network) -> CliConfig {
             eth_light_client_id: Some(defaults::ETH_LIGHT_CLIENT_ID_TESTNET.to_owned()),
             btc_light_client_id: Some(defaults::BTC_LIGHT_CLIENT_ID_TESTNET.to_owned()),
             zcash_light_client_id: Some(defaults::ZCASH_LIGHT_CLIENT_ID_TESTNET.to_owned()),
+            dcr_light_client_id: Some(defaults::DCR_LIGHT_CLIENT_ID_TESTNET.to_owned()),
 
             eth_rpc: Some(defaults::ETH_RPC_TESTNET.to_owned()),
             eth_chain_id: Some(defaults::ETH_CHAIN_ID_TESTNET),
@@ -394,6 +429,12 @@ fn default_config(network: Network) -> CliConfig {
             zcash_connector: Some(defaults::ZCASH_CONNECTOR_TESTNET.to_owned()),
             zcash: Some(defaults::ZCASH_TESTNET.to_owned()),
 
+            dcr_endpoint: Some(defaults::DCR_ENDPOINT_TESTNET.to_owned()),
+            dcr_api_key: None,
+            dcr_basic_auth: None,
+            dcr_connector: Some(defaults::DCR_CONNECTOR_TESTNET.to_owned()),
+            dcr: Some(defaults::DCR_TESTNET.to_owned()),
+
             config: None,
         },
         Network::Devnet => CliConfig {
@@ -404,6 +445,7 @@ fn default_config(network: Network) -> CliConfig {
             eth_light_client_id: Some(defaults::ETH_LIGHT_CLIENT_ID_DEVNET.to_owned()),
             btc_light_client_id: Some(defaults::BTC_LIGHT_CLIENT_ID_DEVNET.to_owned()),
             zcash_light_client_id: Some(defaults::ZCASH_LIGHT_CLIENT_ID_DEVNET.to_owned()),
+            dcr_light_client_id: Some(defaults::DCR_LIGHT_CLIENT_ID_DEVNET.to_owned()),
 
             eth_rpc: Some(defaults::ETH_RPC_DEVNET.to_owned()),
             eth_chain_id: Some(defaults::ETH_CHAIN_ID_DEVNET),
@@ -460,6 +502,12 @@ fn default_config(network: Network) -> CliConfig {
             zcash_basic_auth: None,
             zcash_connector: Some(defaults::ZCASH_CONNECTOR_DEVNET.to_owned()),
             zcash: Some(defaults::ZCASH_DEVNET.to_owned()),
+
+            dcr_endpoint: Some(defaults::DCR_ENDPOINT_DEVNET.to_owned()),
+            dcr_api_key: None,
+            dcr_basic_auth: None,
+            dcr_connector: Some(defaults::DCR_CONNECTOR_DEVNET.to_owned()),
+            dcr: Some(defaults::DCR_DEVNET.to_owned()),
 
             config: None,
         },
