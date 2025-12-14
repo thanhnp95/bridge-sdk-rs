@@ -8,9 +8,6 @@ use omni_types::dcr::{DcrTxOut, OutPoint};
 
 use crate::address::{DcrAddress, Network};
 
-/// ---- BASIC ERROR TYPE (NO bridge-connector-common) ----
-pub type Result<T> = std::result::Result<T, String>;
-
 /// UTXO entry for DCR
 #[serde_as]
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
@@ -23,7 +20,9 @@ pub struct UTXO {
 }
 
 /// Convert UTXO entries -> Vec<OutPoint> ("txid:vout")
-fn utxo_to_outpoints(utxos: Vec<(String, UTXO)>) -> Result<Vec<OutPoint>> {
+fn utxo_to_outpoints(
+    utxos: Vec<(String, UTXO)>
+) -> std::result::Result<Vec<String>, String> {
     utxos
         .into_iter()
         .map(|(txid, utxo)| {
@@ -31,6 +30,10 @@ fn utxo_to_outpoints(utxos: Vec<(String, UTXO)>) -> Result<Vec<OutPoint>> {
                 .split('@')
                 .next()
                 .ok_or_else(|| format!("Invalid txid format: {txid}"))?;
+
+            if txid_str.is_empty() {
+                return Err(format!("Empty txid after parsing: {txid}"));
+            }
 
             Ok(format!("{}:{}", txid_str, utxo.vout))
         })
@@ -48,7 +51,7 @@ pub fn choose_utxos(
     amount: u128,
     utxos: HashMap<String, UTXO>,
     fee_rate: u64,
-) -> Result<(Vec<OutPoint>, u128, u128)> {
+) -> Result<(Vec<OutPoint>, u128, u128), String> {
     let mut list: Vec<(String, UTXO)> = utxos.into_iter().collect();
 
     // Pick largest UTXOs first
@@ -56,22 +59,25 @@ pub fn choose_utxos(
 
     let mut selected = Vec::new();
     let mut total: u128 = 0;
-    let mut gas_fee: u128 = 0;
 
     for item in list {
-        gas_fee = get_gas_fee(selected.len() as u64, 2, fee_rate) as u128;
-
-        if total >= amount + gas_fee {
-            break;
-        }
-
         total += item.1.balance as u128;
         selected.push(item);
+
+        if total >= amount {
+            break;
+        }
     }
 
-    if total < amount + gas_fee {
+    if total < amount {
         return Err("Insufficient UTXO balance".into());
     }
+
+    let gas_fee = get_gas_fee(
+        selected.len() as u64,
+        2,
+        fee_rate,
+    ) as u128;
 
     let outpoints = utxo_to_outpoints(selected)?;
     Ok((outpoints, total, gas_fee))
@@ -102,13 +108,19 @@ pub fn build_dcr_tx_outs(
 
 /// Build many small outputs
 pub fn build_dcr_tx_outs_for_management(
-    change_script: String,
+    change_address: &str,
     output_count: u64,
     total_value: u64,
-) -> Result<Vec<DcrTxOut>> {
+    network: Network,
+) -> std::result::Result<Vec<DcrTxOut>, String> {
     if output_count == 0 {
-        return Err("output_count must be > 0".into());
+        return Err("output_count must be > 0".to_string());
     }
+
+    let change_script = DcrAddress::parse(change_address, network)
+        .map_err(|e| format!("Invalid DCR change address '{change_address}': {e}"))?
+        .script_pubkey()
+        .map_err(|e| format!("Failed to get DCR script_pubkey: {e}"))?;
 
     let one_amount = total_value / output_count;
 
@@ -139,13 +151,18 @@ pub fn choose_utxos_for_active_management(
     max_outputs: usize,
     min_amount: usize,
     network: Network,
-) -> Result<(Vec<OutPoint>, Vec<DcrTxOut>)> {
+) -> std::result::Result<(Vec<String>, Vec<DcrTxOut>), String> {
     let mut list: Vec<(String, UTXO)> = utxos.into_iter().collect();
-
     list.sort_by(|a, b| a.1.balance.cmp(&b.1.balance)); // smallest first
 
     let mut selected = Vec::new();
     let mut total: u64 = 0;
+
+    // parse change script ONCE
+    let change_script = DcrAddress::parse(change_address, network)
+        .map_err(|e| format!("Invalid DCR change address '{change_address}': {e}"))?
+        .script_pubkey()
+        .map_err(|e| format!("Failed to get DCR script_pubkey: {e}"))?;
 
     // ---------------------------
     // Case 1: Too few UTXOs → Split
@@ -155,24 +172,30 @@ pub fn choose_utxos_for_active_management(
 
         for i in 0..use_count {
             total += list[list.len() - 1 - i].1.balance;
-            selected.push(list[i].clone());
+            selected.push(list[list.len() - 1 - i].clone());
         }
 
-        let possible_outputs = std::cmp::min(
+        let output_count = std::cmp::min(
             active_limit.0 - list.len(),
-            std::cmp::min((total as usize / min_amount).saturating_sub(1), max_outputs),
-        );
+            std::cmp::min(
+                (total as usize / min_amount).saturating_sub(1),
+                max_outputs,
+            ),
+        ) as u64;
 
-        let out_count = possible_outputs as u64;
+        if output_count == 0 {
+            return Err("Calculated output_count is zero".to_string());
+        }
 
-        let gas = get_gas_fee(1, out_count, fee_rate);
+        let gas_fee = get_gas_fee(1, output_count, fee_rate);
 
         let outpoints = utxo_to_outpoints(selected)?;
-        let script = DcrAddress::parse(change_address, network)?
-            .script_pubkey()
-            .map_err(|e| format!("Script error: {e}"))?;
-
-        let outs = build_dcr_tx_outs_for_management(script, out_count, total - gas)?;
+        let outs = build_dcr_tx_outs_for_management(
+            change_address,
+            output_count,
+            total - gas_fee,
+            network,
+        )?;
 
         return Ok((outpoints, outs));
     }
@@ -188,17 +211,17 @@ pub fn choose_utxos_for_active_management(
             selected.push((txid.clone(), utxo.clone()));
         }
 
-        let gas = get_gas_fee(use_count as u64, 1, fee_rate);
+        let gas_fee = get_gas_fee(use_count as u64, 1, fee_rate);
 
         let outpoints = utxo_to_outpoints(selected)?;
-        let script = DcrAddress::parse(change_address, network)?
-            .script_pubkey()
-            .map_err(|e| format!("Script error: {e}"))?;
-
-        let outs = build_dcr_tx_outs(script, total - gas, None);
+        let outs = build_dcr_tx_outs(
+            change_script,
+            total - gas_fee,
+            None,
+        );
 
         return Ok((outpoints, outs));
     }
 
-    Err("Incorrect number of UTXOs for active management".into())
+    Err("Incorrect number of UTXOs for active management".to_string())
 }

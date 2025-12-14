@@ -1,9 +1,9 @@
-use serde::{Deserialize, Serialize};
-use reqwest::Client;
 use hex::FromHex;
+use reqwest::Client;
+use serde::Deserialize;
 
 use crate::error::UtxoClientError;
-use crate::types::{DecredBlock};
+use crate::types::DecredBlock;
 
 use merkle_tools::H256;
 
@@ -37,7 +37,8 @@ impl DecredRpc {
             "params": params
         });
 
-        let resp = self.client
+        let resp = self
+            .client
             .post(&self.url)
             .basic_auth(&self.user, Some(&self.pass))
             .json(&body)
@@ -45,9 +46,10 @@ impl DecredRpc {
             .await
             .map_err(|e| UtxoClientError::Other(format!("RPC error: {e}")))?;
 
-        let json: RpcResponse<T> = resp.json().await.map_err(|e| {
-            UtxoClientError::Other(format!("Invalid RPC response: {e}"))
-        })?;
+        let json: RpcResponse<T> = resp
+            .json()
+            .await
+            .map_err(|e| UtxoClientError::Other(format!("Invalid RPC response: {e}")))?;
 
         if let Some(err) = json.error {
             return Err(UtxoClientError::Other(format!(
@@ -63,7 +65,8 @@ impl DecredRpc {
     // Get raw transaction hex
     // -----------------------------
     pub async fn get_raw_tx(&self, txid: &str) -> Result<DcrRawTx, UtxoClientError> {
-        self.rpc_call("getrawtransaction", serde_json::json!([txid, 0])).await
+        self.rpc_call("getrawtransaction", serde_json::json!([txid, 0]))
+            .await
     }
 
     // -----------------------------
@@ -75,7 +78,9 @@ impl DecredRpc {
             .await?;
 
         // convert txids to H256
-        let txids: Vec<H256> = block.tx.iter()
+        let txids: Vec<H256> = block
+            .tx
+            .iter()
             .map(|tx| {
                 let bytes = <[u8; 32]>::from_hex(tx.txid.clone()).unwrap();
                 H256::from(bytes)
@@ -105,13 +110,10 @@ impl DecredRpc {
         txid: &str,
         block_hash: &str,
     ) -> Result<DecredMerkleProof, UtxoClientError> {
-        self.rpc_call(
-            "getmerkleproof",
-            serde_json::json!([txid, block_hash]),
-        )
-        .await
+        self.rpc_call("getmerkleproof", serde_json::json!([txid, block_hash]))
+            .await
     }
-     pub async fn send_dcr_transaction(&self, tx_bytes: &[u8]) -> Result<String, UtxoClientError> {
+    pub async fn send_dcr_transaction(&self, tx_bytes: &[u8]) -> Result<String, UtxoClientError> {
         let hex_str = hex::encode(tx_bytes);
 
         let body = serde_json::json!({
@@ -121,13 +123,16 @@ impl DecredRpc {
             "params": [hex_str]
         });
 
-        let resp = self.client
+        let resp = self
+            .client
             .post(&self.url)
             .basic_auth(&self.user, Some(&self.pass))
             .json(&body)
             .send()
             .await
-            .map_err(|e| UtxoClientError::RpcError(format!("DCR sendrawtransaction failed: {e}")))?;
+            .map_err(|e| {
+                UtxoClientError::RpcError(format!("DCR sendrawtransaction failed: {e}"))
+            })?;
 
         let json: serde_json::Value = resp.json().await.map_err(|e| {
             UtxoClientError::RpcError(format!("Invalid DCR sendrawtransaction response: {e}"))
@@ -142,7 +147,9 @@ impl DecredRpc {
 
         let result = json["result"]
             .as_str()
-            .ok_or(UtxoClientError::RpcError("Missing txid in DCR result".into()))?
+            .ok_or(UtxoClientError::RpcError(
+                "Missing txid in DCR result".into(),
+            ))?
             .to_string();
 
         Ok(result)
@@ -161,6 +168,7 @@ struct RpcResponse<T> {
 
 #[derive(Debug, Deserialize)]
 struct RpcError {
+    #[allow(dead_code)]
     pub code: i64,
     pub message: String,
 }

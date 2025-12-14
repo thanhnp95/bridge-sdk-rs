@@ -27,6 +27,8 @@ use near_bridge_client::btc::{
     BtcVerifyWithdrawArgs, DepositMsg, FinBtcTransferArgs, NearToBtcTransferInfo,
     TokenReceiverMessage, VUTXO,
 };
+
+use near_bridge_client::dcr::DcrTokenReceiverMessage;
 use near_bridge_client::{Decimals, NearBridgeClient, TransactionOptions};
 use solana_bridge_client::{
     DeployTokenData, DepositPayload, FinalizeDepositData, MetadataPayload, SolanaBridgeClient,
@@ -36,7 +38,7 @@ use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::{Keypair, Signature};
 use std::str::FromStr;
 use utxo_bridge_client::{
-    types::{Bitcoin, Zcash, Decred},
+    types::{Bitcoin, Decred, Zcash},
     UTXOBridgeClient,
 };
 use utxo_utils::get_gas_fee;
@@ -615,145 +617,223 @@ impl OmniConnector {
         chain: ChainKind,
         transaction_options: TransactionOptions,
     ) -> Result<CryptoHash> {
-        let utxo_bridge_client = self.utxo_bridge_client(chain)?;
-        let fee_rate = utxo_bridge_client.get_fee_rate().await?;
+        match chain {
+            // ========= DCR =========
+            ChainKind::Dcr => {
+                let utxo_bridge_client = self.dcr_bridge_client()?;
+                let fee_rate = utxo_bridge_client.get_fee_rate().await?;
 
-        let near_bridge_client = self.near_bridge_client()?;
+                let near_bridge_client = self.near_bridge_client()?;
+                let utxos = near_bridge_client.get_dcr_utxos(ChainKind::Dcr).await?;
 
-        let utxos = near_bridge_client.get_utxos(chain).await?;
-        let (
-            active_management_lower_limit,
-            active_management_upper_limit,
-            max_active_utxo_management_input_number,
-            max_active_utxo_management_output_number,
-        ) = near_bridge_client
-            .get_active_management_limit(chain)
-            .await?;
+                let (lower, upper, max_inputs, max_outputs) = near_bridge_client
+                    .get_dcr_active_management_limit(chain)
+                    .await?;
 
-        let change_address = near_bridge_client.get_change_address(chain).await?;
-        let min_deposit_amount = near_bridge_client.get_min_deposit_amount(chain).await?;
-        let (out_points, tx_outs) = match chain {
-            ChainKind::Dcr => dcr_choose_utxos_for_active_mgmt(
-                utxos,
-                fee_rate,
-                &change_address,
-                (
-                    active_management_lower_limit.try_into().unwrap(),
-                    active_management_upper_limit.try_into().unwrap(),
-                ),
-                max_active_utxo_management_input_number.into(),
-                max_active_utxo_management_output_number.into(),
-                min_deposit_amount.try_into().unwrap(),
-                self.network()?,
-            )
-            .map_err(|e| BridgeSdkError::UtxoManagementError(e))?,
-            _ => utxo_utils::choose_utxos_for_active_management(
-                utxos,
-                fee_rate,
-                &change_address,
-                (
-                    active_management_lower_limit.try_into().unwrap(),
-                    active_management_upper_limit.try_into().unwrap(),
-                ),
-                max_active_utxo_management_input_number.into(),
-                max_active_utxo_management_output_number.into(),
-                min_deposit_amount.try_into().unwrap(),
-                chain,
-                self.network()?,
-            )
-            .map_err(BridgeSdkError::UtxoManagementError)?,
-        };
+                let change_address = near_bridge_client
+                    .get_dcr_change_address(ChainKind::Dcr)
+                    .await?;
 
-        near_bridge_client
-            .active_utxo_management(chain, out_points, tx_outs, transaction_options)
-            .await
+                let min_deposit_amount =
+                    near_bridge_client.get_dcr_min_deposit_amount(chain).await?;
+                let dcr_network = match self.network()? {
+                    Network::Mainnet => dcr_utils::address::Network::Mainnet,
+                    Network::Testnet => dcr_utils::address::Network::Testnet,
+                };
+                let (out_points, tx_outs) = dcr_choose_utxos_for_active_mgmt(
+                    utxos,
+                    fee_rate,
+                    &change_address,
+                    (lower as usize, upper as usize),
+                    max_inputs as usize,
+                    max_outputs as usize,
+                    min_deposit_amount as usize,
+                    dcr_network,
+                )
+                .map_err(BridgeSdkError::UtxoManagementError)?;
+
+                near_bridge_client
+                    .active_utxo_management_dcr(
+                        ChainKind::Dcr,
+                        out_points,
+                        tx_outs,
+                        transaction_options,
+                    )
+                    .await
+            }
+
+            // ========= BTC / ZCASH =========
+            _ => {
+                let utxo_bridge_client = self.utxo_bridge_client(chain)?;
+                let fee_rate = utxo_bridge_client.get_fee_rate().await?;
+
+                let near_bridge_client = self.near_bridge_client()?;
+                let utxos = near_bridge_client.get_utxos(chain).await?;
+
+                let (lower, upper, max_inputs, max_outputs) = near_bridge_client
+                    .get_active_management_limit(chain)
+                    .await?;
+
+                let change_address = near_bridge_client.get_change_address(chain).await?;
+                let min_deposit_amount = near_bridge_client.get_min_deposit_amount(chain).await?;
+                let (out_points, tx_outs) = utxo_utils::choose_utxos_for_active_management(
+                    utxos,
+                    fee_rate,
+                    &change_address,
+                    (lower as usize, upper as usize),
+                    max_inputs as usize,
+                    max_outputs as usize,
+                    min_deposit_amount as usize,
+                    chain,
+                    self.network()?,
+                )
+                .map_err(BridgeSdkError::UtxoManagementError)?;
+
+                near_bridge_client
+                    .active_utxo_management(chain, out_points, tx_outs, transaction_options)
+                    .await
+            }
+        }
     }
 
     pub async fn init_near_to_bitcoin_transfer(
         &self,
         chain: ChainKind,
-        target_btc_address: String,
+        target_address: String,
         amount: u128,
         transaction_options: TransactionOptions,
     ) -> Result<CryptoHash> {
-        let utxo_bridge_client = self.utxo_bridge_client(chain)?;
-        let fee_rate = utxo_bridge_client.get_fee_rate().await?;
-
         let near_bridge_client = self.near_bridge_client()?;
-        let utxos = near_bridge_client.get_utxos(chain).await?;
 
-        let withdraw_fee = near_bridge_client.get_withdraw_fee(chain).await?;
+        match chain {
+            // ========== DCR ==========
+            ChainKind::Dcr => {
+                let dcr_bridge_client = self.dcr_bridge_client()?;
+                let fee_rate = dcr_bridge_client.get_fee_rate().await?;
 
-        let net_amount = amount.checked_sub(withdraw_fee).ok_or_else(|| {
-            BridgeSdkError::InvalidArgument("Amount is smaller than `withdraw_fee`".to_string())
-        })?;
+                let utxos = near_bridge_client.get_dcr_utxos(ChainKind::Dcr).await?;
 
-        let (out_points, utxos_balance, gas_fee) = match chain {
-            ChainKind::Dcr => dcr_choose_utxos(net_amount, utxos, fee_rate)
-                .map_err(|e| BridgeSdkError::UtxoManagementError(e))?,
-            _ => utxo_utils::choose_utxos(chain, net_amount, utxos, fee_rate)
-                .map_err(BridgeSdkError::UtxoManagementError)?,
-        };
+                let withdraw_fee = near_bridge_client.get_dcr_withdraw_fee(chain).await?;
+                let net_amount = amount.checked_sub(withdraw_fee).ok_or_else(|| {
+                    BridgeSdkError::InvalidArgument(
+                        "Amount is smaller than `withdraw_fee`".to_string(),
+                    )
+                })?;
 
-        // TODO: use extract_utxo method
-        let change_address = near_bridge_client.get_change_address(chain).await?;
-        let tx_outs = match chain {
-            ChainKind::Dcr => build_dcr_tx_outs(
-                dcr_utils::address::DcrAddress::parse(&target_btc_address, self.network()?)
-                    .map_err(|e| {
-                        BridgeSdkError::InvalidArgument(format!("Invalid DCR address: {e}"))
-                    })?
-                    .script_pubkey()
-                    .map_err(|e| BridgeSdkError::InvalidArgument(format!("Failed script: {e}")))?,
-                (net_amount - gas_fee) as u64,
-                Some((
-                    dcr_utils::address::DcrAddress::parse(&change_address, self.network()?)?
-                        .script_pubkey()?,
-                    (utxos_balance - net_amount) as u64,
-                )),
-            ),
-            _ => utxo_utils::get_tx_outs(
-                &target_btc_address,
-                net_amount
-                    .checked_sub(gas_fee)
-                    .ok_or_else(|| {
-                        BridgeSdkError::InvalidArgument(
-                            "Amount is smaller than `gas_fee`".to_string(),
-                        )
-                    })?
-                    .try_into()
-                    .map_err(|err| {
-                        BridgeSdkError::InvalidLog(format!("Error on amount conversion: {err}"))
-                    })?,
-                &change_address,
-                utxos_balance
+                let (out_points, utxos_balance, gas_fee) =
+                    dcr_choose_utxos(net_amount, utxos, fee_rate)
+                        .map_err(BridgeSdkError::UtxoManagementError)?;
+
+                let change_address = near_bridge_client
+                    .get_dcr_change_address(ChainKind::Dcr)
+                    .await?;
+
+                let dcr_network = match self.network()? {
+                    Network::Mainnet => dcr_utils::address::Network::Mainnet,
+                    Network::Testnet => dcr_utils::address::Network::Testnet,
+                };
+
+                let target_script =
+                    dcr_utils::address::DcrAddress::parse(&target_address, dcr_network)
+                        .map_err(BridgeSdkError::InvalidArgument)?
+                        .script_pubkey()
+                        .map_err(BridgeSdkError::InvalidArgument)?;
+
+                let change_script =
+                    dcr_utils::address::DcrAddress::parse(&change_address, dcr_network)
+                        .map_err(BridgeSdkError::InvalidArgument)?
+                        .script_pubkey()
+                        .map_err(BridgeSdkError::InvalidArgument)?;
+
+                let send_amount = net_amount.checked_sub(gas_fee).ok_or_else(|| {
+                    BridgeSdkError::InvalidArgument("Amount < gas fee".to_string())
+                })?;
+
+                let change_amount = utxos_balance
                     .checked_sub(net_amount)
-                    .ok_or_else(|| BridgeSdkError::InsufficientUTXOBalance)?
-                    .try_into()
-                    .map_err(|err| {
-                        BridgeSdkError::InvalidArgument(format!(
-                            "Error on change amount conversion: {err}"
-                        ))
-                    })?,
-                chain,
-                self.network()?,
-            )
-            .map_err(BridgeSdkError::UtxoManagementError)?,
-        };
+                    .ok_or(BridgeSdkError::InsufficientUTXOBalance)?;
 
-        near_bridge_client
-            .init_btc_transfer_near_to_btc(
-                chain,
-                amount,
-                TokenReceiverMessage::Withdraw {
-                    target_btc_address,
-                    input: out_points,
-                    output: tx_outs,
-                    max_gas_fee: None,
-                },
-                transaction_options,
-            )
-            .await
+                let tx_outs = build_dcr_tx_outs(
+                    target_script,
+                    send_amount as u64,
+                    Some((change_script, change_amount as u64)),
+                );
+
+                near_bridge_client
+                    .init_dcr_transfer(
+                        ChainKind::Dcr,
+                        amount,
+                        DcrTokenReceiverMessage::Withdraw {
+                            target_dcr_address: target_address,
+                            input: out_points,
+                            output: tx_outs,
+                            max_fee_rate: None,
+                        },
+                        transaction_options,
+                    )
+                    .await
+            }
+
+            // ========== BTC / ZCASH ==========
+            _ => {
+                let utxo_bridge_client = self.utxo_bridge_client(chain)?;
+                let fee_rate = utxo_bridge_client.get_fee_rate().await?;
+
+                let utxos = near_bridge_client.get_utxos(chain).await?;
+                let withdraw_fee = near_bridge_client.get_withdraw_fee(chain).await?;
+
+                let net_amount = amount.checked_sub(withdraw_fee).ok_or_else(|| {
+                    BridgeSdkError::InvalidArgument(
+                        "Amount is smaller than `withdraw_fee`".to_string(),
+                    )
+                })?;
+
+                let (out_points, utxos_balance, gas_fee) =
+                    utxo_utils::choose_utxos(chain, net_amount, utxos, fee_rate)
+                        .map_err(BridgeSdkError::UtxoManagementError)?;
+
+                let change_address = near_bridge_client.get_change_address(chain).await?;
+                let tx_outs = utxo_utils::get_tx_outs(
+                    &target_address,
+                    net_amount
+                        .checked_sub(gas_fee)
+                        .ok_or_else(|| {
+                            BridgeSdkError::InvalidArgument(
+                                "Amount is smaller than `gas_fee`".to_string(),
+                            )
+                        })?
+                        .try_into()
+                        .map_err(|e| {
+                            BridgeSdkError::InvalidArgument(format!("Amount conversion error: {e}"))
+                        })?,
+                    &change_address,
+                    utxos_balance
+                        .checked_sub(net_amount)
+                        .ok_or(BridgeSdkError::InsufficientUTXOBalance)?
+                        .try_into()
+                        .map_err(|e| {
+                            BridgeSdkError::InvalidArgument(format!("Change conversion error: {e}"))
+                        })?,
+                    chain,
+                    self.network()?,
+                )
+                .map_err(BridgeSdkError::UtxoManagementError)?;
+
+                near_bridge_client
+                    .init_btc_transfer_near_to_btc(
+                        chain,
+                        amount,
+                        TokenReceiverMessage::Withdraw {
+                            target_btc_address: target_address,
+                            input: out_points,
+                            output: tx_outs,
+                            max_gas_fee: None,
+                        },
+                        transaction_options,
+                    )
+                    .await
+            }
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -769,40 +849,87 @@ impl OmniConnector {
     ) -> Result<CryptoHash> {
         let near_bridge_client = self.near_bridge_client()?;
         let fee = near_bridge_client.get_withdraw_fee(chain).await?;
-        let (out_points, tx_outs, gas_fee) = self
-            .extract_utxo(
-                chain,
-                recipient.clone(),
-                amount.checked_sub(fee).ok_or_else(|| {
-                    BridgeSdkError::InvalidArgument("Amount is smaller than `fee`".to_string())
-                })?,
-                fee_rate,
-            )
-            .await?;
 
-        let max_gas_fee = if let Some(max_gas_fee) = max_gas_fee {
-            if gas_fee > max_gas_fee {
-                return Err(BridgeSdkError::InsufficientUTXOGasFee(format!(
-                    "Estimated gas fee = {gas_fee}, but max gas fee = {max_gas_fee}"
-                )));
+        match chain {
+            // ========== DCR ==========
+            ChainKind::Dcr => {
+                let (out_points, tx_outs, gas_fee) = self
+                    .extract_dcr_utxo(
+                        recipient.clone(),
+                        amount.checked_sub(fee).ok_or_else(|| {
+                            BridgeSdkError::InvalidArgument(
+                                "Amount is smaller than `fee`".to_string(),
+                            )
+                        })?,
+                        fee_rate,
+                    )
+                    .await?;
+
+                let max_fee_rate = if let Some(max_gas_fee) = max_gas_fee {
+                    if gas_fee > max_gas_fee {
+                        return Err(BridgeSdkError::InsufficientUTXOGasFee(format!(
+                            "Estimated gas fee = {gas_fee}, but max gas fee = {max_gas_fee}"
+                        )));
+                    }
+                    Some(near_sdk::json_types::U128::from(u128::from(max_gas_fee)))
+                } else {
+                    None
+                };
+
+                return near_bridge_client
+                    .submit_dcr_transfer(
+                        transfer_id,
+                        DcrTokenReceiverMessage::Withdraw {
+                            target_dcr_address: recipient,
+                            input: out_points,
+                            output: tx_outs,
+                            max_fee_rate,
+                        },
+                        transaction_options,
+                    )
+                    .await;
             }
-            Some(near_sdk::json_types::U128::from(u128::from(max_gas_fee)))
-        } else {
-            None
-        };
 
-        near_bridge_client
-            .submit_btc_transfer(
-                transfer_id,
-                TokenReceiverMessage::Withdraw {
-                    target_btc_address: recipient,
-                    input: out_points,
-                    output: tx_outs,
-                    max_gas_fee,
-                },
-                transaction_options,
-            )
-            .await
+            // ========== BTC / ZCASH ==========
+            _ => {
+                let (out_points, tx_outs, gas_fee) = self
+                    .extract_utxo(
+                        chain,
+                        recipient.clone(),
+                        amount.checked_sub(fee).ok_or_else(|| {
+                            BridgeSdkError::InvalidArgument(
+                                "Amount is smaller than `fee`".to_string(),
+                            )
+                        })?,
+                        fee_rate,
+                    )
+                    .await?;
+
+                let max_gas_fee = if let Some(max_gas_fee) = max_gas_fee {
+                    if gas_fee > max_gas_fee {
+                        return Err(BridgeSdkError::InsufficientUTXOGasFee(format!(
+                            "Estimated gas fee = {gas_fee}, but max gas fee = {max_gas_fee}"
+                        )));
+                    }
+                    Some(near_sdk::json_types::U128::from(u128::from(max_gas_fee)))
+                } else {
+                    None
+                };
+
+                return near_bridge_client
+                    .submit_btc_transfer(
+                        transfer_id,
+                        TokenReceiverMessage::Withdraw {
+                            target_btc_address: recipient,
+                            input: out_points,
+                            output: tx_outs,
+                            max_gas_fee,
+                        },
+                        transaction_options,
+                    )
+                    .await;
+            }
+        }
     }
 
     pub async fn near_rbf_increase_gas_fee(
@@ -813,6 +940,12 @@ impl OmniConnector {
         transaction_options: TransactionOptions,
     ) -> Result<CryptoHash> {
         let near_bridge_client = self.near_bridge_client()?;
+
+        if chain == ChainKind::Dcr {
+            return Err(BridgeSdkError::ConfigError(
+                "RBF is not supported for DCR".to_string(),
+            ));
+        }
 
         if chain == ChainKind::Zcash {
             return near_bridge_client
@@ -2209,12 +2342,9 @@ impl OmniConnector {
         };
 
         let utxos = near_bridge_client.get_utxos(chain).await?;
-        let (out_points, utxos_balance, gas_fee) = match chain {
-            ChainKind::Dcr => dcr_choose_utxos(amount, utxos, fee_rate)
-                .map_err(|e| BridgeSdkError::UtxoManagementError(e))?,
-            _ => utxo_utils::choose_utxos(chain, amount, utxos, fee_rate)
-                .map_err(BridgeSdkError::UtxoManagementError)?,
-        };
+        let (out_points, utxos_balance, gas_fee) =
+            utxo_utils::choose_utxos(chain, amount, utxos, fee_rate)
+                .map_err(BridgeSdkError::UtxoManagementError)?;
 
         let change_address = near_bridge_client.get_change_address(chain).await?;
         let tx_outs = utxo_utils::get_tx_outs(
@@ -2250,5 +2380,61 @@ impl OmniConnector {
                 BridgeSdkError::UnknownError(format!("gas_fee unexpectedly high: {err}"))
             })?,
         ))
+    }
+
+    async fn extract_dcr_utxo(
+        &self,
+        target_dcr_address: String,
+        amount: u128,
+        fee_rate: Option<u64>,
+    ) -> Result<(
+        Vec<omni_types::dcr::OutPoint>,
+        Vec<omni_types::dcr::DcrTxOut>,
+        u64,
+    )> {
+        let near_bridge_client = self.near_bridge_client()?;
+        let dcr_bridge_client = self.dcr_bridge_client()?;
+
+        let fee_rate = fee_rate.unwrap_or(dcr_bridge_client.get_fee_rate().await?);
+
+        let utxos = near_bridge_client.get_dcr_utxos(ChainKind::Dcr).await?;
+
+        let (out_points, utxos_balance, gas_fee) = dcr_utils::choose_utxos(amount, utxos, fee_rate)
+            .map_err(BridgeSdkError::UtxoManagementError)?;
+
+        let change_address = near_bridge_client
+            .get_dcr_change_address(ChainKind::Dcr)
+            .await?;
+
+        let network = match self.network()? {
+            utxo_utils::address::Network::Mainnet => dcr_utils::address::Network::Mainnet,
+            utxo_utils::address::Network::Testnet => dcr_utils::address::Network::Testnet,
+        };
+
+        let target_script = dcr_utils::address::DcrAddress::parse(&target_dcr_address, network)
+            .map_err(BridgeSdkError::InvalidArgument)?
+            .script_pubkey()
+            .map_err(BridgeSdkError::InvalidArgument)?;
+
+        let change_script = dcr_utils::address::DcrAddress::parse(&change_address, network)
+            .map_err(BridgeSdkError::InvalidArgument)?
+            .script_pubkey()
+            .map_err(BridgeSdkError::InvalidArgument)?;
+
+        let send_amount = amount
+            .checked_sub(gas_fee)
+            .ok_or_else(|| BridgeSdkError::InvalidArgument("Amount < gas fee".to_string()))?;
+
+        let change_amount = utxos_balance
+            .checked_sub(amount)
+            .ok_or(BridgeSdkError::InsufficientUTXOBalance)?;
+
+        let tx_outs = dcr_utils::build_dcr_tx_outs(
+            target_script,
+            send_amount as u64,
+            Some((change_script, change_amount as u64)),
+        );
+
+        Ok((out_points, tx_outs, gas_fee as u64))
     }
 }

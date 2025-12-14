@@ -4,7 +4,7 @@ use futures::future::join_all;
 
 use near_primitives::{hash::CryptoHash, types::AccountId};
 use near_rpc_client::{ChangeRequest, ViewRequest};
-use near_sdk::json_types::{U128, U64};
+use near_sdk::json_types::U128;
 use omni_types::{ChainKind, OmniAddress, TransferId};
 
 use serde_json::{json, Value};
@@ -15,7 +15,60 @@ use std::collections::HashMap;
 // ---------------------------
 // DCR-SPECIFIC TYPES
 // ---------------------------
-use omni_types::dcr::{OutPoint, DcrTxOut};
+use omni_types::dcr::{DcrTxOut, OutPoint};
+
+use dcr_utils::UTXO;
+
+#[serde_as]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct DcrWithdrawBridgeFee {
+    #[serde_as(as = "DisplayFromStr")]
+    fee_min: u128,
+    fee_rate: u64,
+    protocol_fee_rate: u64,
+}
+
+#[serde_as]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct DcrPartialConfig {
+    withdraw_bridge_fee: DcrWithdrawBridgeFee,
+    change_address: String,
+
+    #[serde_as(as = "DisplayFromStr")]
+    min_deposit_amount: u128,
+
+    max_active_utxo_management_input_number: u8,
+    max_active_utxo_management_output_number: u8,
+
+    active_management_lower_limit: u32,
+    active_management_upper_limit: u32,
+
+    confirmations_strategy: HashMap<String, u8>,
+    confirmations_delta: u8,
+}
+
+#[serde_as]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct DcrPartialMetadata {
+    pub current_utxos_num: u32,
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct FinDcrTransferArgs {
+    pub deposit_msg: Value,
+    pub tx_bytes: Vec<u8>,
+    pub tx_index: u64,
+    pub tx_block_hash: String,
+    pub merkle_proof: Vec<String>,
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct DcrVerifyWithdrawArgs {
+    pub tx_id: String,
+    pub tx_block_hash: String,
+    pub tx_index: u64,
+    pub merkle_proof: Vec<String>,
+}
 
 // ---------------------------
 // DCR GAS & DEPOSITS
@@ -71,6 +124,22 @@ pub struct DcrPendingInfoPartial {
 // SDK IMPLEMENTATION
 // ---------------------------
 impl NearBridgeClient {
+    async fn get_dcr_config(&self, chain: ChainKind) -> Result<DcrPartialConfig> {
+        let endpoint = self.endpoint()?;
+        let connector = self.utxo_chain_connector(chain)?;
+
+        let response = near_rpc_client::view(
+            endpoint,
+            ViewRequest {
+                contract_account_id: connector,
+                method_name: "get_config".to_string(),
+                args: serde_json::json!({}),
+            },
+        )
+        .await?;
+
+        Ok(serde_json::from_slice::<DcrPartialConfig>(&response)?)
+    }
     // -----------------------------------------------------
     // 1. submit_transfer_to_dcr_connector (OmniBridge call)
     // -----------------------------------------------------
@@ -217,37 +286,6 @@ impl NearBridgeClient {
     }
 
     // -----------------------------------------------------
-    // 5. verify_withdraw (DCR)
-    // -----------------------------------------------------
-    pub async fn dcr_verify_withdraw(
-        &self,
-        chain: ChainKind,
-        args: Value, // <--- replace with DcrWithdrawArgs
-        transaction_options: TransactionOptions,
-    ) -> Result<CryptoHash> {
-        let endpoint = self.endpoint()?;
-        let connector = self.utxo_chain_connector(chain)?;
-
-        let tx_hash = near_rpc_client::change_and_wait(
-            endpoint,
-            ChangeRequest {
-                signer: self.signer()?,
-                nonce: transaction_options.nonce,
-                receiver_id: connector,
-                method_name: "verify_dcr_withdraw".to_string(),
-                args: serde_json::json!(args).to_string().into_bytes(),
-                gas: DCR_VERIFY_WITHDRAW_GAS,
-                deposit: DCR_VERIFY_WITHDRAW_DEPOSIT,
-            },
-            transaction_options.wait_until,
-            transaction_options.wait_final_outcome_timeout_sec,
-        )
-        .await?;
-
-        Ok(tx_hash)
-    }
-
-    // -----------------------------------------------------
     // 6. get_dcr_pending_info
     // -----------------------------------------------------
     pub async fn get_dcr_pending_info(
@@ -270,9 +308,8 @@ impl NearBridgeClient {
         )
         .await?;
 
-        let map = serde_json::from_slice::<HashMap<String, Option<DcrPendingInfoPartial>>>(
-            &response,
-        )?;
+        let map =
+            serde_json::from_slice::<HashMap<String, Option<DcrPendingInfoPartial>>>(&response)?;
 
         Ok(map
             .get(&dcr_pending_id)
@@ -309,5 +346,293 @@ impl NearBridgeClient {
         .await?;
 
         Ok(serde_json::from_slice::<String>(&response)?)
+    }
+
+    pub async fn get_dcr_utxos(&self, chain: ChainKind) -> Result<HashMap<String, UTXO>> {
+        const UTXO_BATCH_SIZE: u32 = 500;
+
+        let utxo_num = self.get_dcr_utxo_num(chain).await?;
+        let endpoint = self.endpoint()?;
+        let connector = self.utxo_chain_connector(chain)?;
+
+        let batch_num = utxo_num.div_ceil(UTXO_BATCH_SIZE);
+        let mut futures = Vec::new();
+
+        for i in 0..batch_num {
+            futures.push(near_rpc_client::view(
+                endpoint,
+                ViewRequest {
+                    contract_account_id: connector.clone(),
+                    method_name: "get_utxos_paged".to_string(),
+                    args: serde_json::json!({
+                        "from_index": i * UTXO_BATCH_SIZE,
+                        "limit": UTXO_BATCH_SIZE
+                    }),
+                },
+            ));
+        }
+
+        let responses = join_all(futures).await;
+        let mut utxos = HashMap::new();
+
+        for resp in responses {
+            let part: HashMap<String, UTXO> = serde_json::from_slice(&resp?)?;
+            utxos.extend(part);
+        }
+
+        Ok(utxos)
+    }
+
+    pub async fn get_dcr_change_address(&self, chain: ChainKind) -> Result<String> {
+        let config = self.get_dcr_config(chain).await?;
+        Ok(config.change_address)
+    }
+
+    pub async fn get_dcr_withdraw_fee(&self, chain: ChainKind) -> Result<u128> {
+        let config = self.get_dcr_config(chain).await?;
+        Ok(config.withdraw_bridge_fee.fee_min)
+    }
+
+    pub async fn get_dcr_active_management_limit(
+        &self,
+        chain: ChainKind,
+    ) -> Result<(u32, u32, u8, u8)> {
+        let config = self.get_dcr_config(chain).await?;
+        Ok((
+            config.active_management_lower_limit,
+            config.active_management_upper_limit,
+            config.max_active_utxo_management_input_number,
+            config.max_active_utxo_management_output_number,
+        ))
+    }
+
+    pub async fn get_dcr_min_deposit_amount(&self, chain: ChainKind) -> Result<u128> {
+        let config = self.get_dcr_config(chain).await?;
+        Ok(config.min_deposit_amount)
+    }
+
+    pub async fn get_dcr_amount_to_transfer(&self, chain: ChainKind, amount: u128) -> Result<u128> {
+        let config = self.get_dcr_config(chain).await?;
+        Ok(std::cmp::max(amount, config.min_deposit_amount))
+    }
+
+    pub async fn get_dcr_confirmations(&self, chain: ChainKind) -> Result<u8> {
+        let config = self.get_dcr_config(chain).await?;
+
+        Ok(config
+            .confirmations_strategy
+            .values()
+            .max()
+            .copied()
+            .unwrap_or(0)
+            + config.confirmations_delta)
+    }
+
+    pub async fn get_dcr_utxo_num(&self, chain: ChainKind) -> Result<u32> {
+        let endpoint = self.endpoint()?;
+        let connector = self.utxo_chain_connector(chain)?;
+
+        let response = near_rpc_client::view(
+            endpoint,
+            ViewRequest {
+                contract_account_id: connector,
+                method_name: "get_metadata".to_string(),
+                args: serde_json::json!({}),
+            },
+        )
+        .await?;
+
+        let metadata = serde_json::from_slice::<DcrPartialMetadata>(&response)?;
+        Ok(metadata.current_utxos_num)
+    }
+
+    pub async fn sign_dcr_transaction_with_tx_hash(
+        &self,
+        chain: ChainKind,
+        near_tx_hash: CryptoHash,
+        user_account_id: Option<AccountId>,
+        sign_index: u64,
+        transaction_options: TransactionOptions,
+    ) -> Result<CryptoHash> {
+        let relayer_id = match user_account_id {
+            Some(id) => id,
+            None => self.satoshi_relayer(chain)?,
+        };
+
+        let log = self
+            .extract_transfer_log(near_tx_hash, Some(relayer_id), "generate_dcr_pending_info")
+            .await?;
+
+        let json_str = log
+            .strip_prefix("EVENT_JSON:")
+            .ok_or(BridgeSdkError::InvalidLog(
+                "Missing EVENT_JSON prefix".to_string(),
+            ))?;
+
+        let v: Value = serde_json::from_str(json_str)?;
+        let dcr_pending_id = v["data"][0]["dcr_pending_id"]
+            .as_str()
+            .ok_or(BridgeSdkError::InvalidLog(
+                "dcr_pending_id not found".to_string(),
+            ))?
+            .to_string();
+
+        self.sign_dcr_transaction(chain, dcr_pending_id, sign_index, transaction_options)
+            .await
+    }
+
+    #[tracing::instrument(skip_all, name = "NEAR FIN DCR TRANSFER")]
+    pub async fn fin_dcr_transfer(
+        &self,
+        chain: ChainKind,
+        args: FinDcrTransferArgs,
+        transaction_options: TransactionOptions,
+    ) -> Result<CryptoHash> {
+        let endpoint = self.endpoint()?;
+        let connector = self.utxo_chain_connector(chain)?;
+
+        let tx_hash = near_rpc_client::change_and_wait(
+            endpoint,
+            ChangeRequest {
+                signer: self.signer()?,
+                nonce: transaction_options.nonce,
+                receiver_id: connector,
+                method_name: "verify_dcr_deposit".to_string(),
+                args: serde_json::json!(args).to_string().into_bytes(),
+                gas: DCR_VERIFY_DEPOSIT_GAS,
+                deposit: DCR_VERIFY_DEPOSIT_DEPOSIT,
+            },
+            transaction_options.wait_until,
+            transaction_options.wait_final_outcome_timeout_sec,
+        )
+        .await?;
+
+        Ok(tx_hash)
+    }
+
+    #[tracing::instrument(skip_all, name = "NEAR DCR VERIFY WITHDRAW")]
+    pub async fn dcr_verify_withdraw(
+        &self,
+        chain: ChainKind,
+        args: DcrVerifyWithdrawArgs,
+        transaction_options: TransactionOptions,
+    ) -> Result<CryptoHash> {
+        let endpoint = self.endpoint()?;
+        let connector = self.utxo_chain_connector(chain)?;
+
+        let tx_hash = near_rpc_client::change_and_wait(
+            endpoint,
+            ChangeRequest {
+                signer: self.signer()?,
+                nonce: transaction_options.nonce,
+                receiver_id: connector,
+                method_name: "verify_dcr_withdraw".to_string(),
+                args: serde_json::json!(args).to_string().into_bytes(),
+                gas: DCR_VERIFY_WITHDRAW_GAS,
+                deposit: DCR_VERIFY_WITHDRAW_DEPOSIT,
+            },
+            transaction_options.wait_until,
+            transaction_options.wait_final_outcome_timeout_sec,
+        )
+        .await?;
+
+        Ok(tx_hash)
+    }
+
+    #[tracing::instrument(skip_all, name = "NEAR DCR CANCEL WITHDRAW")]
+    pub async fn dcr_cancel_withdraw(
+        &self,
+        chain: ChainKind,
+        dcr_tx_hash: String,
+        transaction_options: TransactionOptions,
+    ) -> Result<CryptoHash> {
+        let endpoint = self.endpoint()?;
+        let connector = self.utxo_chain_connector(chain)?;
+
+        let tx_hash = near_rpc_client::change_and_wait(
+            endpoint,
+            ChangeRequest {
+                signer: self.signer()?,
+                nonce: transaction_options.nonce,
+                receiver_id: connector,
+                method_name: "cancel_withdraw".to_string(),
+                args: serde_json::json!({
+                    "original_dcr_pending_verify_id": dcr_tx_hash,
+                    "output": [],
+                })
+                .to_string()
+                .into_bytes(),
+                gas: DCR_VERIFY_WITHDRAW_GAS,
+                deposit: 0,
+            },
+            transaction_options.wait_until,
+            transaction_options.wait_final_outcome_timeout_sec,
+        )
+        .await?;
+
+        Ok(tx_hash)
+    }
+
+    #[tracing::instrument(skip_all, name = "NEAR DCR VERIFY ACTIVE UTXO MANAGEMENT")]
+    pub async fn dcr_verify_active_utxo_management(
+        &self,
+        chain: ChainKind,
+        args: DcrVerifyWithdrawArgs,
+        transaction_options: TransactionOptions,
+    ) -> Result<CryptoHash> {
+        let endpoint = self.endpoint()?;
+        let connector = self.utxo_chain_connector(chain)?;
+
+        let tx_hash = near_rpc_client::change_and_wait(
+            endpoint,
+            ChangeRequest {
+                signer: self.signer()?,
+                nonce: transaction_options.nonce,
+                receiver_id: connector,
+                method_name: "verify_active_utxo_management".to_string(),
+                args: serde_json::json!(args).to_string().into_bytes(),
+                gas: DCR_VERIFY_WITHDRAW_GAS,
+                deposit: 0,
+            },
+            transaction_options.wait_until,
+            transaction_options.wait_final_outcome_timeout_sec,
+        )
+        .await?;
+
+        Ok(tx_hash)
+    }
+
+    pub async fn active_utxo_management_dcr(
+        &self,
+        chain: ChainKind,
+        input: Vec<OutPoint>,
+        output: Vec<DcrTxOut>,
+        transaction_options: TransactionOptions,
+    ) -> Result<CryptoHash> {
+        let endpoint = self.endpoint()?;
+        let connector = self.utxo_chain_connector(chain)?;
+
+        let tx_hash = near_rpc_client::change_and_wait(
+            endpoint,
+            ChangeRequest {
+                signer: self.signer()?,
+                nonce: transaction_options.nonce,
+                receiver_id: connector,
+                method_name: "active_utxo_management".to_string(),
+                args: serde_json::json!({
+                    "input": input,
+                    "output": output,
+                })
+                .to_string()
+                .into_bytes(),
+                gas: 300_000_000_000_000,
+                deposit: 0,
+            },
+            transaction_options.wait_until,
+            transaction_options.wait_final_outcome_timeout_sec,
+        )
+        .await?;
+
+        Ok(tx_hash)
     }
 }
