@@ -448,9 +448,20 @@ impl OmniConnector {
     ) -> Result<CryptoHash> {
         let near_bridge_client = self.near_bridge_client()?;
 
-        near_bridge_client
-            .sign_btc_transaction(chain, btc_pending_id, sign_index, transaction_options)
-            .await
+        match chain {
+            // ========= DCR =========
+            ChainKind::Dcr => {
+                near_bridge_client
+                    .sign_dcr_transaction(chain, btc_pending_id, sign_index, transaction_options)
+                    .await
+            }
+            // ========= BTC / ZCASH =========
+            _ => {
+                near_bridge_client
+                    .sign_btc_transaction(chain, btc_pending_id, sign_index, transaction_options)
+                    .await
+            }
+        }
     }
 
     pub async fn near_sign_btc_transaction_with_tx_hash(
@@ -463,15 +474,32 @@ impl OmniConnector {
     ) -> Result<CryptoHash> {
         let near_bridge_client = self.near_bridge_client()?;
 
-        near_bridge_client
-            .sign_btc_transaction_with_tx_hash(
-                chain,
-                near_tx_hash,
-                user_account_id,
-                sign_index,
-                transaction_options,
-            )
-            .await
+        match chain {
+            // ========= DCR =========
+            ChainKind::Dcr => {
+                near_bridge_client
+                    .sign_dcr_transaction_with_tx_hash(
+                        chain,
+                        near_tx_hash,
+                        user_account_id,
+                        sign_index,
+                        transaction_options,
+                    )
+                    .await
+            }
+            // ========= BTC / ZCASH =========
+            _ => {
+                near_bridge_client
+                    .sign_btc_transaction_with_tx_hash(
+                        chain,
+                        near_tx_hash,
+                        user_account_id,
+                        sign_index,
+                        transaction_options,
+                    )
+                    .await
+            }
+        }
     }
 
     pub async fn near_fin_transfer_btc(
@@ -607,9 +635,20 @@ impl OmniConnector {
         fee: u128,
     ) -> Result<String> {
         let near_bridge_client = self.near_bridge_client()?;
-        near_bridge_client
-            .get_btc_address(chain, recipient_id, fee)
-            .await
+        match chain {
+            // ========= DCR =========
+            ChainKind::Dcr => {
+                near_bridge_client
+                    .get_dcr_address(chain, recipient_id, fee)
+                    .await
+            }
+            // ========= BTC / ZCASH =========
+            _ => {
+                near_bridge_client
+                    .get_btc_address(chain, recipient_id, fee)
+                    .await
+            }
+        }
     }
 
     pub async fn active_utxo_management(
