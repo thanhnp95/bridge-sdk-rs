@@ -1178,7 +1178,7 @@ fn omni_connector(network: Network, cli_config: CliConfig) -> OmniConnector {
     let zcash_bridge_client =
         UTXOBridgeClient::<Zcash>::new(combined_config.zcash_endpoint.unwrap(), zcash_client_auth);
 
-    let _dcr_bridge_client =
+    let dcr_bridge_client: UTXOBridgeClient<Decred> =
         UTXOBridgeClient::<Decred>::new(combined_config.dcr_endpoint.unwrap(), dcr_client_auth);
 
     let eth_light_client = LightClientBuilder::default()
@@ -1235,6 +1235,7 @@ fn omni_connector(network: Network, cli_config: CliConfig) -> OmniConnector {
         .solana_bridge_client(Some(solana_bridge_client))
         .wormhole_bridge_client(Some(wormhole_bridge_client))
         .btc_bridge_client(Some(btc_bridge_client))
+        .dcr_bridge_client(Some(dcr_bridge_client))
         .zcash_bridge_client(Some(zcash_bridge_client))
         .eth_light_client(Some(eth_light_client))
         .btc_light_client(Some(btc_light_client))
